@@ -1,6 +1,7 @@
 use std::path::Path;
 use image::{ImageBuffer, RgbImage};
 use rayon::prelude::*;
+use std::io::Cursor; // Needed for in-memory reading
 
 // --- Algorithm Selection ---
 // Choose which demosaicing algorithm to use.
@@ -34,12 +35,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let exposure_compensation = 1.5;
 
     // --- 1. Load RAW File and Metadata ---
-    println!("Loading RAW file: {}", input_path);
-    let raw_image = rawloader::decode_file(Path::new(input_path))?;
+    println!("Reading file into memory: {}", input_path);
+    // Read the whole file into a byte buffer first. This allows us to pass it to multiple parsers.
+    let file_bytes = std::fs::read(Path::new(input_path))?;
+
+    println!("Loading RAW data from buffer...");
+    let raw_image = rawloader::decode(&mut Cursor::new(&file_bytes))?;
     let data = match raw_image.data {
         rawloader::RawImageData::Integer(data) => data,
         _ => panic!("This example only supports integer raw data."),
     };
+
+    println!("--- Full EXIF Data (from kamadak-exif) ---");
+    let exif_reader = exif::Reader::new();
+    match exif_reader.read_from_container(&mut Cursor::new(&file_bytes)) {
+        Ok(exif) => {
+            if exif.fields().len() == 0 {
+                println!("  No EXIF data found in file.");
+            } else {
+                for field in exif.fields() {
+                    println!("  {:<25}: {}",
+                        field.tag,
+                        field.display_value().with_unit(&exif)
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            println!("  Could not read EXIF data: {}", e);
+        }
+    }
+    println!("------------------------------------------\n");
+
 
     let width = raw_image.width as u32;
     let height = raw_image.height as u32;
